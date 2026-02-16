@@ -1,0 +1,357 @@
+
+#CTC4302.RDS
+library(Seurat)
+# 读取 RDS 文件
+obj <- readRDS("/Volumes/Ruitong/CTC.4302.RDS")
+# 显示 UMAP 降维结果
+DimPlot(obj, reduction = "umap")
+View(obj@meta.data)
+unique(obj$CTCtype)
+
+BiocManager::install(c("SingleCellExperiment", "schex"))
+library(Seurat)
+library(SingleCellExperiment)
+library(schex)
+install.packages("hexbin") 
+library(ggplot2)
+library(dplyr)
+library(hexbin)
+
+# 1) 准备数据
+df <- data.frame(
+  UMAP_1  = Embeddings(obj, "umap")[,1],
+  UMAP_2  = Embeddings(obj, "umap")[,2],
+  CTCtype = obj$CTCtype
+)
+
+# 2) 用 hexbin 分箱，并取得每个点所属 hex 的 ID
+bins <- 60
+hb   <- hexbin(df$UMAP_1, df$UMAP_2, xbins = bins, IDs = TRUE)
+
+# 每个点的 hex ID
+df$hex_id <- hb@cID                     # 每个点对应的六边形ID
+centers   <- hcell2xy(hb)               # 每个已占用六边形的中心坐标
+# hb@cell 是已占用六边形的 ID 列表，与 centers 行一一对应
+
+# 3) 计算每个 hex 的 “count” 和 “多数类”
+hex_summary <- df %>%
+  group_by(hex_id) %>%
+  summarize(
+    count    = n(),
+    majority = names(which.max(table(CTCtype))),
+    .groups  = "drop"
+  )
+
+# 把中心坐标拼回每个 hex（通过匹配 hex_id -> hb@cell 的行号）
+hex_summary$idx    <- match(hex_summary$hex_id, hb@cell)
+hex_summary$UMAP_1 <- centers$x[hex_summary$idx]
+hex_summary$UMAP_2 <- centers$y[hex_summary$idx]
+
+# 4) 画图：底层灰度=count，叠加彩色描边=多数类
+ggplot() +
+  # 灰度底层（计数）
+  stat_binhex(
+    data = df,
+    aes(UMAP_1, UMAP_2, fill = after_stat(count)),
+    bins = bins, color = "grey90", alpha = 0.85
+  ) +
+  # count 图例：2/4/6/8 从上到下、浅到深
+  scale_fill_stepsn(
+    name   = "count",
+    breaks = c(2, 4, 6, 8),
+    limits = c(0, 8),
+    colors = c("#F2F2F2", "#CFCFCF", "#969696", "#525252"),
+  ) +
+  # 彩色描边（多数类）
+  geom_hex(
+    data = hex_summary,
+    aes(UMAP_1, UMAP_2, color = majority),
+    bins = bins, fill = NA, linewidth = 0.45, show.legend = TRUE
+  ) +
+  # 与主图一致的一组颜色
+  scale_color_manual(
+    name   = "CTCtype",
+    values = c(
+      "c01_CTC_H2AZ1+"   = "#9ACAE1",
+      "c02_CTC_HLA-DRA+" = "#1976B5",
+      "c03_CTC_ABHD2+"   = "#4EA946",
+      "c04_CTC_KRT7+"    = "#29BFB2",
+      "c05_CTC_KRT81+"   = "#73A3FA",
+      "c06_CTC_CTSS+"    = "#F28E2B"
+    ),
+    labels = c("H2AZ1+", "HLA–DRA+", "ABHD2+", "KRT7+", "KRT81+", "CTSS+"),
+    breaks = c("c01_CTC_H2AZ1+","c02_CTC_HLA-DRA+","c03_CTC_ABHD2+",
+               "c04_CTC_KRT7+","c05_CTC_KRT81+","c06_CTC_CTSS+")
+  ) +
+  labs(title = paste0("nCells:", ncol(obj)), x = "UMAP_1", y = "UMAP_2") +
+  theme_classic() +
+  theme(
+    plot.title   = element_text(hjust = 0, face = "bold", size = 14),
+    legend.title = element_text(face = "bold"),
+    legend.position = "right"
+  ) +
+  guides(
+    # CTCtype 图例（黑边实心方块）
+    color = guide_legend(
+      override.aes = list(
+        fill = c("#9ACAE1","#1976B5","#4EA946","#29BFB2","#73A3FA","#F28E2B"),
+        color = "black", shape = 22, size = 5, linewidth = 0.5
+      ),
+      order = 1
+    ),
+    # count 图例：更大、更方、更明显的灰度块
+    fill = guide_colorsteps(
+      order = 2, 
+      ticks = TRUE,
+      barwidth = 1,     # 横向宽度 (默认0.3，可加大)
+      barheight = 4.5,    # 纵向高度 (默认3.6，增加视觉方块尺寸)
+      frame.colour = "black",  # 黑色边框更清晰
+      label.position = "right"
+    )
+  )
+
+colnames(obj@meta.data)
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(tibble)
+library(ggrepel)
+
+# 1) 提取 metadata
+meta <- obj@meta.data %>%
+  dplyr::select(CTCtype, Diagnosis) %>%
+  tidyr::drop_na()
+
+# 设置绘图顺序（根据你需要调整）
+meta$Diagnosis <- factor(meta$Diagnosis, levels = c("mHSPC", "mCRPC"))
+meta$CTCtype <- factor(meta$CTCtype, levels = c(
+  "c01_CTC_H2AZ1+","c02_CTC_HLA-DRA+","c03_CTC_ABHD2+",
+  "c04_CTC_KRT7+","c05_CTC_KRT81+","c06_CTC_CTSS+"
+))
+
+# 2) 颜色（与UMAP一致）
+pal <- c(
+  "c01_CTC_H2AZ1+"   = "#9ACAE1",
+  "c02_CTC_HLA-DRA+" = "#1976B5",
+  "c03_CTC_ABHD2+"   = "#4EA946",
+  "c04_CTC_KRT7+"    = "#29BFB2",
+  "c05_CTC_KRT81+"   = "#73A3FA",
+  "c06_CTC_CTSS+"    = "#F28E2B"
+)
+
+# 3) 绘图：堆积百分比条
+ggplot(meta, aes(x = Diagnosis, fill = CTCtype)) +
+  geom_bar(position = "fill", width = 0.8, color = NA) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(
+    values = pal,
+    name = "CTCtype",
+    labels = c("H2AZ1+", "HLA–DRA+", "ABHD2+", "KRT7+", "KRT81+", "CTSS+")
+  ) +
+  labs(x = NULL, y = "Percentage %") +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.title.y = element_text(face = "bold"),
+    axis.text.x  = element_text(face = "bold", size = 12),
+    legend.title = element_text(face = "bold"),
+    legend.text  = element_text(size = 10),
+    legend.position = "right"
+  )
+
+# 检测差异基因与火山图
+Idents(obj) <- "Maintype"
+group1_cells <- WhichCells(object = obj, ident = "Subtype_Malignant")
+group2_cells <- WhichCells(object = obj, ident = "Subtype_Granulocyte")
+DefaultAssay(obj) <- "tfsulm"
+# 对两组进行差异表达分析
+de_genes <- FindMarkers(obj, ident.1 = "Subtype_Malignant", ident.2 = "Subtype_Granulocyte", 
+                        only.pos = FALSE, min.pct = 0.25, logfc.threshold = 0.25)
+# 添加一列标记显著上调、显著下调和非显著基因
+de_genes$group <- "Not Significant"
+de_genes$group[de_genes$avg_log2FC > 0.5 & de_genes$p_val < 0.05] <- "Upregulated"
+de_genes$group[de_genes$avg_log2FC < -0.5 & de_genes$p_val < 0.05] <- "Downregulated"
+de_genes$gene <- rownames(de_genes)
+
+top10_up1 <- de_genes %>%
+  filter(group == "Upregulated") %>%
+  arrange((p_val)) %>%
+  head(10)
+top10_down1 <- de_genes %>%
+  filter(group == "Downregulated") %>%
+  arrange((p_val)) %>%
+  head(10)
+# 合并这两个基因列表
+top10_genes1 <- bind_rows(
+  mutate(top10_up1, Regulation = "Upregulated"),
+  mutate(top10_down1, Regulation = "Downregulated")
+)
+top10_genes1
+
+# 计算 -log10(p_val_adj) 并添加到数据框
+de_genes$logP <- -log10(de_genes$p_val_adj)
+de_genes$logP[de_genes$logP > 200] <- 200
+
+#火山图
+vplot <- ggplot(de_genes, aes(x = avg_log2FC, y = -log10(p_val_adj), color = group)) +
+  geom_point(alpha = 0.8, size = 1.5) + 
+  scale_color_manual(values = c("red", "blue", "grey"),
+                     breaks = c("Upregulated", "Downregulated", "Not Significant")) + 
+  labs(title = " ", x = "Log2(Fold Change)", y = "-Log10(Pvalue)") +
+  theme_classic() +
+  theme(legend.title = element_blank()) +
+  # 添加虚线（在这里以 avg_log2FC = 0 为例，表示对数折叠变化的分界线）
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "grey", size = 0.5) + 
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "grey", size = 0.5) +
+  # 如果你想添加 p 值为 0.05 的分界线，可以用如下方式：
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey", size = 0.5)
+
+vplot
+# 添加标签和其他元素
+vplot_labeled <- vplot +
+  geom_text_repel(aes(label = ifelse(rownames(de_genes) %in% top10_genes1$gene, rownames(de_genes), "")),
+                  size = 3, color = "black", max.overlaps = Inf, 
+                  segment.color = "black",  # 设置指向线的颜色
+                  segment.linetype = "solid", # 设置指向线的线型（如实线）
+                  segment.size = 0.5, 
+                  force = 5)  # 确保指示线始终显示
+
+# 绘制加标签后的图形
+vplot_labeled
+
+library(clusterProfiler)
+library(GseaVis)
+library(limma)
+library(pheatmap)
+library(tidyverse)
+library(ggthemes) 
+
+# GSEA分析
+pathways <- read.gmt("/Volumes/Ruitong/WPSCTC_all/newCTC15/pipeline test/immune-VIM+/600/allimm-VIM+/c5.go.v2024.1.Hs.symbols.gmt")
+# 准备排序后的基因列表
+ranked_genes <- de_genes$p_val_adj
+names(ranked_genes) <- rownames(de_genes)
+ranked_genes <- sort(ranked_genes, decreasing = TRUE)
+
+ranked_genes <- as.data.frame(ranked_genes)
+View(ranked_genes)
+
+length(unique(pathways$term))
+y <- GSEA(ranked_genes, TERM2GENE = pathways, pvalueCutoff = 0.05, verbose=FALSE, eps = 0)
+yd <- as.data.frame(y)
+View(yd)
+
+# Load data
+file_path <- "/Users/liminghe/Desktop/副本bulk&sc.de.M.G.xlsx"
+df <- read_excel(file_path, sheet = "bulk&sc.de.M.G")
+
+# Convert p-values to -log10 scale
+df$log_pval <- -log10(df$p_val_adj.sc)
+
+# Define significance thresholds
+pval_threshold <- 0.05
+logfc_threshold <- 0.5
+
+# Classify genes as upregulated, downregulated, or non-significant
+df$Significance <- "Not Significant"
+df$Significance[df$p_val_adj.sc < pval_threshold & df$avg_log2FC.sc > logfc_threshold] <- "Upregulated"
+df$Significance[df$p_val_adj.sc < pval_threshold & df$avg_log2FC.sc < -logfc_threshold] <- "Downregulated"
+
+# Create volcano plot
+ggplot(df, aes(x = avg_log2FC.sc, y = log_pval, color = Significance)) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue", "Not Significant" = "gray")) +
+  geom_vline(xintercept = c(-logfc_threshold, logfc_threshold), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(pval_threshold), linetype = "dashed", color = "black") +
+  labs(title = "Volcano Plot of Single-Cell Differential Expression",
+       x = "Log2 Fold Change (avg_log2FC.sc)",
+       y = "-log10(Adjusted P-value)") +
+  theme_minimal()
+
+# Select genes to label
+genes_to_label <- c("HLA-A", "B2M", "HLA-B", "HLA-DRA", "HLA-DRB1", "HLA-DQB1", "HLA-C", "HLA-DMB", "HLA-A", "HLA-F")
+df$label <- ifelse(df$gene %in% genes_to_label, df$gene, NA)
+
+# Create volcano plot
+pp <- ggplot(df, aes(x = avg_log2FC.sc, y = log_pval, color = Significance)) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue", "Not Significant" = "gray")) +
+  geom_vline(xintercept = c(-logfc_threshold, logfc_threshold), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(pval_threshold), linetype = "dashed", color = "black") +
+  labs(title = "Volcano Plot of Single-Cell Differential Expression",
+       x = "Log2 Fold Change (avg_log2FC.sc)",
+       y = "-log10(Adjusted P-value)") +
+  theme_classic() +
+  geom_text_repel(aes(label = label),
+                  size = 3, color = "black", max.overlaps = Inf, 
+                  segment.color = "black",  # 设置指向线的颜色
+                  segment.linetype = "solid", # 设置指向线的线型（如实线）
+                  segment.size = 0.5, 
+                  force = 5)  # 确保指示线始终显示
+pp
+top10_up1 <- df %>%
+  filter(Significance == "Upregulated") %>%
+  arrange((p_val_adj.sc)) %>%
+  head(10)
+top10_down1 <- df %>%
+  filter(Significance == "Downregulated") %>%
+  arrange((p_val_adj.sc)) %>%
+  head(10)
+# 合并这两个基因列表
+top10_genes1 <- bind_rows(
+  mutate(top10_up1, Regulation = "Upregulated"),
+  mutate(top10_down1, Regulation = "Downregulated")
+)
+View(top10_genes1)
+
+ggplot(df, aes(x = avg_log2FC.sc, y = log_pval, color = Significance)) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue", "Not Significant" = "gray")) +
+  geom_vline(xintercept = c(-logfc_threshold, logfc_threshold), linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(pval_threshold), linetype = "dashed", color = "black") +
+  labs(title = "Volcano Plot of Single-Cell Differential Expression",
+       x = "Log2 Fold Change",
+       y = "-log10(Adjusted P-value)") +
+  theme_classic() +
+  geom_text_repel(aes(label = ifelse(df$gene %in% top10_genes1$gene, df$gene, "")),
+                  size = 3, color = "black", max.overlaps = Inf, 
+                  segment.color = "black",  # 设置指向线的颜色
+                  segment.linetype = "solid", # 设置指向线的线型（如实线）
+                  segment.size = 0.5, 
+                  force = 5)  # 确保指示线始终显示
+
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(ggplot2)
+library(scales)
+
+## 1) 取出两列（去掉NA）
+meta <- na.omit(obj@meta.data[, c("Maintype", "Phase")])
+
+## 2) 设定顺序（按你要的显示顺序）
+meta$Maintype <- factor(meta$Maintype,
+                        levels = c("Subtype_Malignant", "Subtype_Granulocyte"))
+meta$Phase    <- factor(meta$Phase,
+                        levels = c("G1", "S", "G2M"))  # 如果原来是 "G2/M"，先统一下写法：meta$Phase <- gsub("G2/M","G2M",meta$Phase)
+
+## 3) 颜色（与示例图风格相近）
+phase_colors <- c(
+  "G1"  = "#08519C",  # 深蓝
+  "S"   = "#A1D99B",  # 浅绿
+  "G2M" = "#238B45"   # 深绿
+)
+
+## 4) 绘图：Maintype 在 y 轴，Phase 为填充，横向百分比
+ggplot(meta, aes(y = Maintype, fill = Phase)) +
+  geom_bar(position = "fill", width = 0.72, color = NA) +
+  scale_x_continuous(labels = percent_format(accuracy = 1), expand = c(0, 0)) +
+  scale_fill_manual(values = phase_colors, name = "Phase") +
+  labs(x = "Percentage (%)", y = NULL) +
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    axis.title.x  = element_text(face = "bold"),
+    axis.text.y   = element_text(face = "bold")
+  )
